@@ -294,6 +294,27 @@ class Main
         return json_encode(array("success" => $result));
     }
 
+    public function getAttendanceByYearLevelAndEvent($json)
+    {
+        $data = json_decode($json, true);
+        $sql = "SELECT s.year_level, 
+                    COUNT(a.student_id) AS present_count,
+                    COUNT(s.student_id) AS total_students
+                FROM students s
+                LEFT JOIN attendance a ON s.student_id = a.student_id AND a.event_id = :event_id
+                WHERE s.tribu_id IS NOT NULL
+                GROUP BY s.year_level
+                ORDER BY s.year_level ASC
+                ;
+                ";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':event_id', $data['event_id']);
+        $stmt->execute();
+        $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        return json_encode(["success" => $result]);
+    }
+
+
 
     // CRUD for Events
     public function createEvent($json)
@@ -425,6 +446,9 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" || $_SERVER["REQUEST_METHOD"] == "POST")
                 break;
             case 'getAttendanceByEvent':
                 echo $main->getAttendanceByEvent($json);
+                break;
+            case 'getAttendanceByYearLevelAndEvent':
+                echo $main->getAttendanceByYearLevelAndEvent($json);
                 break;
 
             // Event Operations
