@@ -3,8 +3,8 @@
 class DatabaseConnection
 {
     private $server = "localhost";
-    private $username = "admindatabase";
-    private $password = "password";
+    private $username = "root";
+    private $password = "";
     private $database = "it_days_attendance";
     private static $instance = null;
     private $conn;

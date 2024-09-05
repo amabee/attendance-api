@@ -170,53 +170,83 @@ class Main
     {
         $data = json_decode($json, true);
         $student_id = $data['student_id'];
+        $event_id = $data['event_id']; // Extract event_id from JSON
 
-        // Check if student is already checked in
-        $checkSql = "SELECT * FROM attendance WHERE student_id = :student_id AND check_out_time IS NULL";
+        // Check if event is active
+        $eventSql = "SELECT isActive FROM events WHERE event_id = :event_id";
+        $eventStmt = $this->conn->prepare($eventSql);
+        $eventStmt->bindParam(':event_id', $event_id);
+        $eventStmt->execute();
+        $event = $eventStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$event || $event['isActive'] == 0) {
+            return json_encode(["error" => "Event is not active"]);
+        }
+
+        // Check if student is already checked in for the event
+        $checkSql = "SELECT * FROM attendance WHERE student_id = :student_id AND event_id = :event_id AND check_out_time IS NULL";
         $checkStmt = $this->conn->prepare($checkSql);
         $checkStmt->bindParam(':student_id', $student_id);
+        $checkStmt->bindParam(':event_id', $event_id); // Bind event_id parameter
         $checkStmt->execute();
 
         if ($checkStmt->rowCount() > 0) {
-            return json_encode(["error" => "Student is already checked in"]);
+            return json_encode(["error" => "Student is already checked in for this event"]);
         }
 
-        // Record new check-in
-        $sql = "INSERT INTO attendance (student_id, check_in_time) VALUES (:student_id, NOW())";
+        // Record new check-in with event_id
+        $sql = "INSERT INTO attendance (student_id, event_id, check_in_time) VALUES (:student_id, :event_id, NOW())";
         $stmt = $this->conn->prepare($sql);
         $stmt->bindParam(':student_id', $student_id);
+        $stmt->bindParam(':event_id', $event_id); // Bind event_id parameter
         if ($stmt->execute()) {
-            return json_encode(["success" => true, "message" => "Check-in recorded successfully"]);
+            return json_encode(["success" => "Check-in recorded successfully"]);
         } else {
             return json_encode(["error" => "Failed to record check-in: " . $stmt->errorInfo()[2]]);
         }
     }
 
+
     public function checkOutStudent($json)
     {
         $data = json_decode($json, true);
         $student_id = $data['student_id'];
+        $event_id = $data['event_id']; // Extract event_id from JSON
 
-        // Check if student has checked in and not yet checked out
-        $checkSql = "SELECT * FROM attendance WHERE student_id = :student_id AND check_out_time IS NULL";
+        // Check if event is active
+        $eventSql = "SELECT isActive FROM events WHERE event_id = :event_id";
+        $eventStmt = $this->conn->prepare($eventSql);
+        $eventStmt->bindParam(':event_id', $event_id);
+        $eventStmt->execute();
+        $event = $eventStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$event || $event['isActive'] == 0) {
+            return json_encode(["error" => "Event is not active"]);
+        }
+
+        // Check if student has checked in for the specified event and not yet checked out
+        $checkSql = "SELECT * FROM attendance WHERE student_id = :student_id AND event_id = :event_id AND check_out_time IS NULL";
         $checkStmt = $this->conn->prepare($checkSql);
         $checkStmt->bindParam(':student_id', $student_id);
+        $checkStmt->bindParam(':event_id', $event_id); // Bind event_id parameter
         $checkStmt->execute();
 
         if ($checkStmt->rowCount() === 0) {
-            return json_encode(["error" => "No check-in record found for this student or already checked out"]);
+            return json_encode(["error" => "No check-in record found for this student or already checked out for this event"]);
         }
 
         // Record check-out
-        $sql = "UPDATE attendance SET check_out_time = NOW() WHERE student_id = :student_id AND check_out_time IS NULL";
+        $sql = "UPDATE attendance SET check_out_time = NOW() WHERE student_id = :student_id AND event_id = :event_id AND check_out_time IS NULL";
         $stmt = $this->conn->prepare($sql);
         $stmt->bindParam(':student_id', $student_id);
+        $stmt->bindParam(':event_id', $event_id); // Bind event_id parameter
         if ($stmt->execute()) {
-            return json_encode(["success" => true, "message" => "Check-out recorded successfully"]);
+            return json_encode(["success" => "Check-out recorded successfully"]);
         } else {
             return json_encode(["error" => "Failed to record check-out: " . $stmt->errorInfo()[2]]);
         }
     }
+
 
     // Attendance Reports
     public function getAttendanceByStudent($json)
@@ -228,6 +258,43 @@ class Main
         $stmt->execute();
         $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
         return json_encode($result);
+    }
+
+    public function getStudentsAttendanceWithRate()
+    {
+        // Fetch all students
+        $sql = "SELECT * FROM students";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+
+        if ($stmt->rowCount() > 0) {
+            $students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Prepare to fetch total events count
+            $sqlTotalEvents = "SELECT COUNT(*) as total_events FROM events"; // Assuming an 'events' table
+            $stmtTotalEvents = $this->conn->prepare($sqlTotalEvents);
+            $stmtTotalEvents->execute();
+            $totalEvents = $stmtTotalEvents->fetch(PDO::FETCH_ASSOC)['total_events'];
+
+            foreach ($students as &$student) {
+                // SQL to count how many events the student actually attended
+                $sqlAttendedEvents = "SELECT COUNT(*) as attended_events FROM attendance WHERE student_id = :student_id AND check_in_time IS NOT NULL"; // Assuming 'status' column tracks attendance
+                $stmtAttendedEvents = $this->conn->prepare($sqlAttendedEvents);
+                $stmtAttendedEvents->bindParam(':student_id', $student['student_id']);
+                $stmtAttendedEvents->execute();
+                $attendedEvents = $stmtAttendedEvents->fetch(PDO::FETCH_ASSOC)['attended_events'];
+
+                // Calculate attendance rate
+                $attendanceRate = $totalEvents > 0 ? ($attendedEvents / $totalEvents) * 100 : 0;
+
+                // Add attendance rate to each student record
+                $student['attendance_rate'] = $attendanceRate;
+            }
+
+            return json_encode(["success" => $students]);
+        }
+
+        return json_encode(["success" => []]);
     }
 
     public function getAttendanceByTribu($json)
@@ -312,6 +379,132 @@ class Main
         $stmt->execute();
         $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
         return json_encode(["success" => $result]);
+    }
+
+    // public function getAttendanceByTribuWithRate($json)
+    // {
+    //     $data = json_decode($json, true);
+
+    //     // SQL to get tribu's attendance details, including students with null check-in time
+    //     $sql = "SELECT t.tribu_name,
+    //                    COUNT(s.student_id) AS total_count,  -- Count all students in the tribu
+    //                    SUM(CASE WHEN a.check_in_time IS NOT NULL THEN 1 ELSE 0 END) AS present_count,
+    //                    COUNT(s.student_id) - SUM(CASE WHEN a.check_in_time IS NOT NULL THEN 1 ELSE 0 END) AS absent_count
+    //             FROM students s
+    //             LEFT JOIN attendance a ON s.student_id = a.student_id
+    //             JOIN tribus t ON s.tribu_id = t.tribu_id
+    //             WHERE s.tribu_id = :tribu_id
+    //             GROUP BY t.tribu_name";
+
+    //     $stmt = $this->conn->prepare($sql);
+    //     $stmt->bindParam(':tribu_id', $data['tribu_id']);
+    //     $stmt->execute();
+    //     $tribuResult = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    //     if ($tribuResult) {
+    //         $totalCount = $tribuResult['total_count'];
+    //         $presentCount = $tribuResult['present_count'];
+
+    //         // Calculate the overall attendance rate for the tribu
+    //         $attendanceRate = $totalCount > 0 ? ($presentCount / $totalCount) * 100 : 0;
+
+    //         // Add the attendance rate to the result
+    //         $tribuResult['attendance_rate'] = $attendanceRate;
+
+    //         // Fetch individual students' attendance rate within the tribu
+    //         $sqlStudents = "SELECT s.student_id, s.name, 
+    //                                SUM(CASE WHEN a.check_in_time IS NOT NULL THEN 1 ELSE 0 END) AS attended_events
+    //                         FROM students s
+    //                         LEFT JOIN attendance a ON s.student_id = a.student_id
+    //                         WHERE s.tribu_id = :tribu_id
+    //                         GROUP BY s.student_id, s.name";
+    //         $stmtStudents = $this->conn->prepare($sqlStudents);
+    //         $stmtStudents->bindParam(':tribu_id', $data['tribu_id']);
+    //         $stmtStudents->execute();
+    //         $studentsResult = $stmtStudents->fetchAll(PDO::FETCH_ASSOC);
+
+    //         // Calculate attendance rate for each student
+    //         foreach ($studentsResult as &$student) {
+    //             $student['attendance_rate'] = $totalCount > 0 ? ($student['attended_events'] / $totalCount) * 100 : 0;
+    //         }
+
+    //         return json_encode([
+    //             "success" => [
+    //                 "tribu" => $tribuResult,
+    //                 "students" => $studentsResult
+    //             ]
+    //         ]);
+    //     }
+
+    //     return json_encode(["success" => []]);
+    // }
+
+    public function getAttendanceByTribuWithRate($json)
+    {
+        $data = json_decode($json, true);
+
+        // SQL to get tribu's attendance details, including students with null check-in time
+        $sql = "SELECT t.tribu_name,
+                   COUNT(s.student_id) AS total_count,  -- Count all students in the tribu
+                   SUM(CASE WHEN a.check_in_time IS NOT NULL THEN 1 ELSE 0 END) AS present_count,
+                   COUNT(s.student_id) - SUM(CASE WHEN a.check_in_time IS NOT NULL THEN 1 ELSE 0 END) AS absent_count
+            FROM students s
+            LEFT JOIN attendance a ON s.student_id = a.student_id
+            JOIN tribus t ON s.tribu_id = t.tribu_id
+            WHERE s.tribu_id = :tribu_id
+            GROUP BY t.tribu_name";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':tribu_id', $data['tribu_id']);
+        $stmt->execute();
+        $tribuResult = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // Prepare the tribuResult to be in array format
+        $tribuArray = [];
+        if ($tribuResult) {
+            $totalCount = $tribuResult['total_count'];
+            $presentCount = $tribuResult['present_count'];
+
+            // Calculate the overall attendance rate for the tribu
+            $attendanceRate = $totalCount > 0 ? ($presentCount / $totalCount) * 100 : 0;
+
+            // Add the attendance rate to the result
+            $tribuResult['attendance_rate'] = $attendanceRate;
+
+            // Wrap in array
+            $tribuArray[] = $tribuResult;
+
+            // Fetch individual students' attendance rate within the tribu
+            $sqlStudents = "SELECT s.student_id, s.name, 
+                           SUM(CASE WHEN a.check_in_time IS NOT NULL THEN 1 ELSE 0 END) AS attended_events
+                        FROM students s
+                        LEFT JOIN attendance a ON s.student_id = a.student_id
+                        WHERE s.tribu_id = :tribu_id
+                        GROUP BY s.student_id, s.name";
+            $stmtStudents = $this->conn->prepare($sqlStudents);
+            $stmtStudents->bindParam(':tribu_id', $data['tribu_id']);
+            $stmtStudents->execute();
+            $studentsResult = $stmtStudents->fetchAll(PDO::FETCH_ASSOC);
+
+            // Calculate attendance rate for each student
+            foreach ($studentsResult as &$student) {
+                $student['attendance_rate'] = $totalCount > 0 ? ($student['attended_events'] / $totalCount) * 100 : 0;
+            }
+
+            return json_encode([
+                "success" => [
+                    "tribu" => $tribuArray,  // Return as array
+                    "students" => $studentsResult
+                ]
+            ]);
+        }
+
+        return json_encode([
+            "success" => [
+                "tribu" => [],
+                "students" => []
+            ]
+        ]);
     }
 
 
@@ -449,6 +642,12 @@ if ($_SERVER["REQUEST_METHOD"] == "GET" || $_SERVER["REQUEST_METHOD"] == "POST")
                 break;
             case 'getAttendanceByYearLevelAndEvent':
                 echo $main->getAttendanceByYearLevelAndEvent($json);
+                break;
+            case 'getStudentsAttendanceWithRate':
+                echo $main->getStudentsAttendanceWithRate();
+                break;
+            case 'getAttendanceByTribuWithRate':
+                echo $main->getAttendanceByTribuWithRate($json);
                 break;
 
             // Event Operations
